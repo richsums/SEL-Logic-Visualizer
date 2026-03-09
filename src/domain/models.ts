@@ -60,11 +60,8 @@ export interface OrExpr {
 // ------------------------------------------------------------------
 
 export interface Equation {
-  /** The assignment target (left-hand side). */
   target: string;
-  /** The parsed expression (right-hand side). */
   expr: ExprNode;
-  /** Where in the source this equation lives. */
   loc: SourceLocation;
 }
 
@@ -78,12 +75,11 @@ export interface ParseResult {
 }
 
 // ------------------------------------------------------------------
-// Diagnostics (parse errors, semantic warnings, etc.)
+// Diagnostics
 // ------------------------------------------------------------------
 
 export type DiagnosticSeverity = 'error' | 'warning' | 'info';
 
-/** A diagnostic code that callers can match on. */
 export type DiagnosticCode =
   | 'PARSE_ERROR'
   | 'DUPLICATE_TARGET'
@@ -95,9 +91,7 @@ export interface Diagnostic {
   severity: DiagnosticSeverity;
   code: DiagnosticCode;
   message: string;
-  /** Source location if available. */
   loc?: SourceLocation;
-  /** Extra context, e.g. the cycle path. */
   detail?: string;
 }
 
@@ -105,25 +99,11 @@ export interface Diagnostic {
 // Symbol table
 // ------------------------------------------------------------------
 
-/** A single entry in the symbol table. */
 export interface SymbolEntry {
-  /** Symbol name as it appears in source. */
   name: string;
-  /**
-   * The equation that defines this symbol (assigns it).
-   * Null when the symbol is referenced but never defined (external input).
-   */
   definedBy: Equation | null;
-  /**
-   * All equations whose RHS reference this symbol.
-   */
   referencedBy: Equation[];
-  /** True when this symbol is referenced but never defined in the document. */
   isExternalInput: boolean;
-  /**
-   * True when this symbol is defined but never used by any other equation's
-   * right-hand side.  These are candidate "outputs" of the logic sheet.
-   */
   isUnreferenced: boolean;
 }
 
@@ -132,71 +112,41 @@ export interface SymbolEntry {
 // ------------------------------------------------------------------
 
 export interface AnalysisResult {
-  /** Map from symbol name → entry. */
   symbols: Map<string, SymbolEntry>;
-  /** Symbol names referenced but never defined. */
   undefinedReferences: string[];
-  /** Symbol names defined but never referenced. */
   unusedVariables: string[];
-  /** Each inner array is one detected cycle, expressed as a list of names. */
   cycles: string[][];
-  /** All diagnostics produced during analysis. */
   diagnostics: Diagnostic[];
 }
 
 // ------------------------------------------------------------------
-// Gate-level intermediate representation (IR)
+// Gate-level IR
 // ------------------------------------------------------------------
 
-/** The logical function implemented by a gate node. */
 export type GateType = 'AND' | 'OR' | 'NOT' | 'SIGNAL';
 
-/**
- * A node in the gate-level IR graph.
- *
- * Signal nodes represent named wires (either external inputs or defined
- * variables).  Gate nodes represent logical operations.
- *
- * Edges are encoded as `inputs`: each entry is the ID of another GateIRNode
- * that feeds data INTO this node.
- */
 export interface GateIRNode {
   id: string;
   gateType: GateType;
-  /** Human-readable label (variable name or gate type). */
   label: string;
-  /** If this node represents a named symbol, this is that name. */
   symbolName?: string;
-  /** Provenance back to source. */
   loc?: SourceLocation;
-  /** IDs of upstream nodes that are inputs to this node. */
   inputs: string[];
 }
 
-/** The complete gate-level IR graph. */
 export interface GateGraph {
-  /** All nodes keyed by their unique ID. */
   nodes: Map<string, GateIRNode>;
-  /**
-   * Signal node IDs that are external inputs (no driver equation).
-   * Useful for layout seeding.
-   */
   inputSignalIds: string[];
-  /**
-   * Signal node IDs that are unreferenced outputs.
-   */
   outputSignalIds: string[];
 }
 
 // ------------------------------------------------------------------
-// Symbol dependency graph (symbol-level, used for analysis)
+// Symbol dependency graph
 // ------------------------------------------------------------------
 
 export interface DepGraphNode {
   name: string;
-  /** Symbol names that this symbol depends on (its RHS references). */
   dependsOn: string[];
-  /** Symbol names that depend on this symbol. */
   dependedOnBy: string[];
 }
 
@@ -205,27 +155,102 @@ export interface DependencyGraph {
 }
 
 // ------------------------------------------------------------------
-// Analysis engine output (per selected node)
+// Boolean circuit simulation
 // ------------------------------------------------------------------
 
-export interface NodeDetail {
-  symbolName: string;
-  nodeType: GateType;
-  /** Human-readable equation text, if this is a defined signal. */
-  equationText?: string;
-  loc?: SourceLocation;
+export interface SimulationState {
+  enabled: boolean;
+  /** User-controlled values: external inputs and optional overrides. */
+  inputValues: Map<string, boolean>;
 }
 
-export interface UpstreamTrace {
-  /** IDs of all gate graph nodes reachable upstream from the selected node. */
-  nodeIds: Set<string>;
-  /** IDs of all edges that are part of the upstream subgraph. */
-  edgeIds: Set<string>;
+export interface SimulationResult {
+  /**
+   * Computed truth value for every signal.
+   * null = the signal is in a cycle (undefined).
+   */
+  values: Map<string, boolean | null>;
 }
 
-export interface EnglishExplanation {
-  /** The symbol being explained. */
+// ------------------------------------------------------------------
+// Asserting paths & blocking conditions
+// ------------------------------------------------------------------
+
+/**
+ * A minimal conjunction of signal values that asserts an output.
+ * Each path corresponds to one route through the OR tree of an equation.
+ */
+export interface PathCondition {
+  /** Signals that MUST be true. */
+  asserted: string[];
+  /** Signals that MUST be false (blocking conditions). */
+  negated: string[];
+}
+
+export interface AssertingPath {
+  index: number;
+  conditions: PathCondition;
+  /** Set when simulation result is available. */
+  isActive?: boolean;
+}
+
+export interface BlockingCondition {
+  /** The signal whose assertion blocks a path. */
+  signal: string;
+  pathIndices: number[];
+}
+
+// ------------------------------------------------------------------
+// Node tags (protection-function classification)
+// ------------------------------------------------------------------
+
+export type ProtectionTag =
+  | 'trip'
+  | 'block'
+  | 'supervise'
+  | 'alarm'
+  | 'reclose'
+  | 'other';
+
+export const PROTECTION_TAG_META: Record<
+  ProtectionTag,
+  { label: string; bg: string; text: string; border: string }
+> = {
+  trip:      { label: 'TRIP',    bg: '#fef2f2', text: '#dc2626', border: '#fca5a5' },
+  block:     { label: 'BLOCK',   bg: '#fffbeb', text: '#d97706', border: '#fcd34d' },
+  supervise: { label: 'SUPV',    bg: '#eff6ff', text: '#2563eb', border: '#bfdbfe' },
+  alarm:     { label: 'ALARM',   bg: '#faf5ff', text: '#7c3aed', border: '#c4b5fd' },
+  reclose:   { label: 'RCLOSE',  bg: '#f0fdf4', text: '#16a34a', border: '#86efac' },
+  other:     { label: 'OTHER',   bg: '#f8fafc', text: '#64748b', border: '#cbd5e1' },
+};
+
+/** Map from symbol name → assigned protection tags. */
+export type NodeTags = Map<string, ProtectionTag[]>;
+
+// ------------------------------------------------------------------
+// Revision comparison (diff)
+// ------------------------------------------------------------------
+
+export type DiffStatus = 'added' | 'removed' | 'modified' | 'unchanged';
+
+export interface EquationDiff {
   target: string;
-  /** Human-readable English description. */
-  text: string;
+  status: DiffStatus;
+  before?: Equation;
+  after?: Equation;
+  detail?: string;
 }
+
+export interface RevisionDiff {
+  equations: EquationDiff[];
+  addedSymbols: string[];
+  removedSymbols: string[];
+  modifiedSymbols: string[];
+  unchangedSymbols: string[];
+}
+
+// ------------------------------------------------------------------
+// Application mode
+// ------------------------------------------------------------------
+
+export type AppMode = 'visualize' | 'simulate' | 'compare';
